@@ -127,6 +127,12 @@ async fn main() {
 
     let server = Server::bind(&addr).serve(make_service);
 
+    println!(
+        "Serving HTTP on {} port {} (http://{}/)...",
+        addr.ip(),
+        addr.port(),
+        addr
+    );
     if let Err(e) = server.await {
         eprintln!("server error: {}", e);
     }

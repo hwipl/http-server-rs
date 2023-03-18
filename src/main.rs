@@ -41,9 +41,8 @@ async fn is_local_dir(req: &Request<Body>) -> bool {
     }
 }
 
-async fn get_local_dir_html(req: &Request<Body>) -> String {
-    let req_path = req.uri().path();
-    let mut html = format!(
+fn get_local_dir_html_start(req: &Request<Body>) -> String {
+    let html = format!(
         "<!DOCTYPE html>\n\
         <html>\n\
         <head>\n\
@@ -54,9 +53,14 @@ async fn get_local_dir_html(req: &Request<Body>) -> String {
         <hr>\n\
         <ul>\n\
         <li><a href={1}>..</a></li>",
-        req_path,
+        req.uri().path(),
         get_uri_path_parent(&req),
     );
+    html
+}
+
+async fn get_local_dir_html_li(req: &Request<Body>, html: &mut String) {
+    let req_path = req.uri().path();
     let local_path = get_local_path(&req);
     if let Ok(mut entries) = tokio::fs::read_dir(local_path).await {
         while let Ok(Some(entry)) = entries.next_entry().await {
@@ -83,6 +87,9 @@ async fn get_local_dir_html(req: &Request<Body>) -> String {
             }
         }
     }
+}
+
+fn get_local_dir_html_end(html: &mut String) {
     write!(
         html,
         "</ul>\n\
@@ -91,6 +98,12 @@ async fn get_local_dir_html(req: &Request<Body>) -> String {
         </html>"
     )
     .unwrap();
+}
+
+async fn get_local_dir_html(req: &Request<Body>) -> String {
+    let mut html = get_local_dir_html_start(req);
+    get_local_dir_html_li(req, &mut html).await;
+    get_local_dir_html_end(&mut html);
     html
 }
 

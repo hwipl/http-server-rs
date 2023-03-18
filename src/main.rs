@@ -3,6 +3,7 @@ use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Method, Request, Response, Server, StatusCode};
 use std::convert::Infallible;
 use std::env;
+use std::fmt::Write;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use tokio::fs::File;
@@ -68,22 +69,28 @@ async fn get_local_dir_html(req: &Request<Body>) -> String {
                     false => "",
                 };
                 if let Some(name) = entry.file_name().to_str() {
-                    let li = match req_path {
-                        "/" => format!("<li><a href=/{0}>{0}{1}</a></li>\n", name, is_dir),
-                        _ => format!(
+                    match req_path {
+                        "/" => write!(html, "<li><a href=/{0}>{0}{1}</a></li>\n", name, is_dir)
+                            .unwrap(),
+                        _ => write!(
+                            html,
                             "<li><a href={0}/{1}>{1}{2}</a></li>\n",
                             req_path, name, is_dir
-                        ),
+                        )
+                        .unwrap(),
                     };
-                    html += &li;
                 }
             }
         }
     }
-    html += "</ul>\n\
-             <hr>\n\
-             </body>\n\
-             </html>";
+    write!(
+        html,
+        "</ul>\n\
+        <hr>\n\
+        </body>\n\
+        </html>"
+    )
+    .unwrap();
     html
 }
 

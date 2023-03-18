@@ -43,7 +43,16 @@ async fn is_local_dir(req: &Request<Body>) -> bool {
 async fn get_local_dir_html(req: &Request<Body>) -> String {
     let req_path = req.uri().path();
     let mut html = format!(
-        "<!DOCTYPE html><html><head><title>{0}</title></head><body><ul><li><a href={1}>..</a></li>",
+        "<!DOCTYPE html>\n\
+        <html>\n\
+        <head>\n\
+        <title>Directory listing for {0}</title>\n\
+        </head>\n\
+        <body>\n\
+        <h1>Directory listing for {0}</h1>\n\
+        <hr>\n\
+        <ul>\n\
+        <li><a href={1}>..</a></li>",
         req_path,
         get_uri_path_parent(&req),
     );
@@ -60,9 +69,9 @@ async fn get_local_dir_html(req: &Request<Body>) -> String {
                 };
                 if let Some(name) = entry.file_name().to_str() {
                     let li = match req_path {
-                        "/" => format!("<li><a href=/{0}>{0}{1}</a></li>", name, is_dir),
+                        "/" => format!("<li><a href=/{0}>{0}{1}</a></li>\n", name, is_dir),
                         _ => format!(
-                            "<li><a href={0}/{1}>{1}{2}</a></li>",
+                            "<li><a href={0}/{1}>{1}{2}</a></li>\n",
                             req_path, name, is_dir
                         ),
                     };
@@ -71,7 +80,10 @@ async fn get_local_dir_html(req: &Request<Body>) -> String {
             }
         }
     }
-    html += "</ul></body></html>";
+    html += "</ul>\n\
+             <hr>\n\
+             </body>\n\
+             </html>";
     html
 }
 

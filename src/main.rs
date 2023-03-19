@@ -1,6 +1,6 @@
 use hyper::server::conn::AddrStream;
 use hyper::service::{make_service_fn, service_fn};
-use hyper::{Body, Method, Request, Response, Server, StatusCode};
+use hyper::{Body, Method, Request, Response, StatusCode};
 use std::convert::Infallible;
 use std::env;
 use std::fmt::Write;
@@ -8,6 +8,38 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use tokio::fs::File;
 use tokio_util::codec::{BytesCodec, FramedRead};
+
+struct Server {}
+
+impl Server {
+    fn new() -> Self {
+        Server {}
+    }
+
+    async fn run(&self) {
+        let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
+
+        // create request handler that uses remote address
+        let make_service = make_service_fn(|conn: &AddrStream| {
+            let remote_addr = conn.remote_addr();
+            let service = service_fn(move |req| handle(remote_addr, req));
+
+            async move { Ok::<_, Infallible>(service) }
+        });
+
+        let server = hyper::Server::bind(&addr).serve(make_service);
+
+        println!(
+            "Serving HTTP on {} port {} (http://{}/)...",
+            addr.ip(),
+            addr.port(),
+            addr
+        );
+        if let Err(e) = server.await {
+            eprintln!("server error: {}", e);
+        }
+    }
+}
 
 fn bad_request() -> Result<Response<Body>, Infallible> {
     Ok(Response::builder()
@@ -147,25 +179,5 @@ async fn handle(remote_addr: SocketAddr, req: Request<Body>) -> Result<Response<
 
 #[tokio::main]
 async fn main() {
-    let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
-
-    // create request handler that uses remote address
-    let make_service = make_service_fn(|conn: &AddrStream| {
-        let remote_addr = conn.remote_addr();
-        let service = service_fn(move |req| handle(remote_addr, req));
-
-        async move { Ok::<_, Infallible>(service) }
-    });
-
-    let server = Server::bind(&addr).serve(make_service);
-
-    println!(
-        "Serving HTTP on {} port {} (http://{}/)...",
-        addr.ip(),
-        addr.port(),
-        addr
-    );
-    if let Err(e) = server.await {
-        eprintln!("server error: {}", e);
-    }
+    Server::new().run().await
 }

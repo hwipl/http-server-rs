@@ -12,12 +12,14 @@ use tokio_util::codec::{BytesCodec, FramedRead};
 #[derive(Clone)]
 struct Config {
     addr: SocketAddr,
+    dir: PathBuf,
 }
 
 impl Config {
     fn new() -> Self {
         let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
-        Config { addr }
+        let dir = env::current_dir().unwrap();
+        Config { addr, dir }
     }
 }
 
@@ -65,7 +67,7 @@ impl Server {
 }
 
 struct Handler {
-    _config: Config,
+    config: Config,
     remote_addr: SocketAddr,
     request: Request<Body>,
 }
@@ -73,7 +75,7 @@ struct Handler {
 impl Handler {
     fn new(config: Config, remote_addr: SocketAddr, request: Request<Body>) -> Self {
         Handler {
-            _config: config,
+            config,
             remote_addr,
             request,
         }
@@ -205,7 +207,7 @@ impl Handler {
         if path.len() > 0 {
             path = &path[1..];
         }
-        env::current_dir().unwrap().join(path)
+        self.config.dir.join(path)
     }
 
     fn get_uri_path_parent(&self) -> &str {

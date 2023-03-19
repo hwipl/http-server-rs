@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use tokio::fs::File;
 use tokio_util::codec::{BytesCodec, FramedRead};
 
+#[derive(Clone)]
 struct Config {
     addr: SocketAddr,
 }
@@ -32,8 +33,9 @@ impl Server {
     async fn run(&self) {
         // create request handler that uses remote address
         let make_service = make_service_fn(|conn: &AddrStream| {
+            let config = self.config.clone();
             let remote_addr = conn.remote_addr();
-            let service = service_fn(move |req| handle(remote_addr, req));
+            let service = service_fn(move |req| Self::handle(config.clone(), remote_addr, req));
 
             async move { Ok::<_, Infallible>(service) }
         });
@@ -51,43 +53,78 @@ impl Server {
             eprintln!("server error: {}", e);
         }
     }
-}
 
-fn bad_request() -> Result<Response<Body>, Infallible> {
-    Ok(Response::builder()
-        .status(StatusCode::BAD_REQUEST)
-        .body(Body::empty())
-        .unwrap())
-}
-
-fn get_local_path(req: &Request<Body>) -> PathBuf {
-    let mut path = req.uri().path();
-    if path.len() > 0 {
-        path = &path[1..];
-    }
-    env::current_dir().unwrap().join(path)
-}
-
-fn get_uri_path_parent(req: &Request<Body>) -> &str {
-    let path = req.uri().path();
-    match path.rsplit_once("/") {
-        Some(("", _right)) => "/",
-        Some((left, _right)) => left,
-        None => path,
+    async fn handle(
+        config: Config,
+        remote_addr: SocketAddr,
+        req: Request<Body>,
+    ) -> Result<Response<Body>, Infallible> {
+        let handler = Handler::new(config, remote_addr, req);
+        handler.handle().await
     }
 }
 
-async fn is_local_dir(req: &Request<Body>) -> bool {
-    let path = get_local_path(&req);
-    match tokio::fs::metadata(path).await {
-        Ok(metadata) => metadata.is_dir(),
-        Err(_) => false,
-    }
+struct Handler {
+    _config: Config,
+    remote_addr: SocketAddr,
+    request: Request<Body>,
 }
 
-fn get_local_dir_html_start(req: &Request<Body>) -> String {
-    let html = format!(
-        "<!DOCTYPE html>\n\
+impl Handler {
+    fn new(config: Config, remote_addr: SocketAddr, request: Request<Body>) -> Self {
+        Handler {
+            _config: config,
+            remote_addr,
+            request,
+        }
+    }
+
+    async fn handle(&self) -> Result<Response<Body>, Infallible> {
+        match self.request.method() {
+            &Method::GET => self.handle_get().await,
+            _ => self.bad_request(),
+        }
+    }
+
+    fn bad_request(&self) -> Result<Response<Body>, Infallible> {
+        Ok(Response::builder()
+            .status(StatusCode::BAD_REQUEST)
+            .body(Body::empty())
+            .unwrap())
+    }
+
+    async fn handle_get(&self) -> Result<Response<Body>, Infallible> {
+        println!(
+            "{} {} {}",
+            self.remote_addr,
+            self.request.method(),
+            self.request.uri().path()
+        );
+
+        if self.is_local_dir().await {
+            self.handle_get_dir().await
+        } else {
+            self.handle_get_file().await
+        }
+    }
+
+    async fn is_local_dir(&self) -> bool {
+        let path = self.get_local_path();
+        match tokio::fs::metadata(path).await {
+            Ok(metadata) => metadata.is_dir(),
+            Err(_) => false,
+        }
+    }
+
+    async fn handle_get_dir(&self) -> Result<Response<Body>, Infallible> {
+        let html = self.get_local_dir_html().await;
+        let body = Body::from(html);
+        Ok(Response::new(body))
+    }
+
+    fn get_local_dir_html_start(&self) -> String {
+        let html = format!(
+            "<!DOCTYPE html>\n\
         <html>\n\
         <head>\n\
         <title>Directory listing for {0}</title>\n\
@@ -97,95 +134,87 @@ fn get_local_dir_html_start(req: &Request<Body>) -> String {
         <hr>\n\
         <ul>\n\
         <li><a href={1}>..</a></li>",
-        req.uri().path(),
-        get_uri_path_parent(&req),
-    );
-    html
-}
+            self.request.uri().path(),
+            self.get_uri_path_parent(),
+        );
+        html
+    }
 
-async fn get_local_dir_html_li(req: &Request<Body>, html: &mut String) {
-    let req_path = req.uri().path();
-    let local_path = get_local_path(&req);
-    if let Ok(mut entries) = tokio::fs::read_dir(local_path).await {
-        while let Ok(Some(entry)) = entries.next_entry().await {
-            if let Ok(filetype) = entry.file_type().await {
-                if filetype.is_symlink() {
-                    continue;
-                }
-                let is_dir = match filetype.is_dir() {
-                    true => "/",
-                    false => "",
-                };
-                if let Some(name) = entry.file_name().to_str() {
-                    match req_path {
-                        "/" => write!(html, "<li><a href=/{0}>{0}{1}</a></li>\n", name, is_dir)
-                            .unwrap(),
-                        _ => write!(
-                            html,
-                            "<li><a href={0}/{1}>{1}{2}</a></li>\n",
-                            req_path, name, is_dir
-                        )
-                        .unwrap(),
+    async fn get_local_dir_html_li(&self, html: &mut String) {
+        let req_path = self.request.uri().path();
+        let local_path = self.get_local_path();
+        if let Ok(mut entries) = tokio::fs::read_dir(local_path).await {
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                if let Ok(filetype) = entry.file_type().await {
+                    if filetype.is_symlink() {
+                        continue;
+                    }
+                    let is_dir = match filetype.is_dir() {
+                        true => "/",
+                        false => "",
                     };
+                    if let Some(name) = entry.file_name().to_str() {
+                        match req_path {
+                            "/" => write!(html, "<li><a href=/{0}>{0}{1}</a></li>\n", name, is_dir)
+                                .unwrap(),
+                            _ => write!(
+                                html,
+                                "<li><a href={0}/{1}>{1}{2}</a></li>\n",
+                                req_path, name, is_dir
+                            )
+                            .unwrap(),
+                        };
+                    }
                 }
             }
         }
     }
-}
 
-fn get_local_dir_html_end(html: &mut String) {
-    write!(
-        html,
-        "</ul>\n\
+    fn get_local_dir_html_end(&self, html: &mut String) {
+        write!(
+            html,
+            "</ul>\n\
         <hr>\n\
         </body>\n\
         </html>"
-    )
-    .unwrap();
-}
+        )
+        .unwrap();
+    }
 
-async fn get_local_dir_html(req: &Request<Body>) -> String {
-    let mut html = get_local_dir_html_start(req);
-    get_local_dir_html_li(req, &mut html).await;
-    get_local_dir_html_end(&mut html);
-    html
-}
+    async fn get_local_dir_html(&self) -> String {
+        let mut html = self.get_local_dir_html_start();
+        self.get_local_dir_html_li(&mut html).await;
+        self.get_local_dir_html_end(&mut html);
+        html
+    }
 
-async fn handle_get_dir(req: Request<Body>) -> Result<Response<Body>, Infallible> {
-    let html = get_local_dir_html(&req).await;
-    let body = Body::from(html);
-    Ok(Response::new(body))
-}
-
-async fn handle_get_file(req: Request<Body>) -> Result<Response<Body>, Infallible> {
-    let path = get_local_path(&req);
-    match File::open(path).await {
-        Ok(file) => {
-            let stream = FramedRead::new(file, BytesCodec::new());
-            let body = Body::wrap_stream(stream);
-            Ok(Response::new(body))
+    async fn handle_get_file(&self) -> Result<Response<Body>, Infallible> {
+        let path = self.get_local_path();
+        match File::open(path).await {
+            Ok(file) => {
+                let stream = FramedRead::new(file, BytesCodec::new());
+                let body = Body::wrap_stream(stream);
+                Ok(Response::new(body))
+            }
+            _ => self.bad_request(),
         }
-        _ => bad_request(),
     }
-}
 
-async fn handle_get(
-    remote_addr: SocketAddr,
-    req: Request<Body>,
-) -> Result<Response<Body>, Infallible> {
-    println!("{} {} {}", remote_addr, req.method(), req.uri().path());
-
-    if is_local_dir(&req).await {
-        handle_get_dir(req).await
-    } else {
-        handle_get_file(req).await
+    fn get_local_path(&self) -> PathBuf {
+        let mut path = self.request.uri().path();
+        if path.len() > 0 {
+            path = &path[1..];
+        }
+        env::current_dir().unwrap().join(path)
     }
-}
 
-async fn handle(remote_addr: SocketAddr, req: Request<Body>) -> Result<Response<Body>, Infallible> {
-    match req.method() {
-        &Method::GET => handle_get(remote_addr, req).await,
-        _ => bad_request(),
+    fn get_uri_path_parent(&self) -> &str {
+        let path = self.request.uri().path();
+        match path.rsplit_once("/") {
+            Some(("", _right)) => "/",
+            Some((left, _right)) => left,
+            None => path,
+        }
     }
 }
 

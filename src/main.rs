@@ -9,16 +9,27 @@ use std::path::PathBuf;
 use tokio::fs::File;
 use tokio_util::codec::{BytesCodec, FramedRead};
 
-struct Server {}
+struct Config {
+    addr: SocketAddr,
+}
+
+impl Config {
+    fn new() -> Self {
+        let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
+        Config { addr }
+    }
+}
+
+struct Server {
+    config: Config,
+}
 
 impl Server {
-    fn new() -> Self {
-        Server {}
+    fn new(config: Config) -> Self {
+        Server { config }
     }
 
     async fn run(&self) {
-        let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
-
         // create request handler that uses remote address
         let make_service = make_service_fn(|conn: &AddrStream| {
             let remote_addr = conn.remote_addr();
@@ -27,6 +38,7 @@ impl Server {
             async move { Ok::<_, Infallible>(service) }
         });
 
+        let addr = self.config.addr;
         let server = hyper::Server::bind(&addr).serve(make_service);
 
         println!(
@@ -179,5 +191,6 @@ async fn handle(remote_addr: SocketAddr, req: Request<Body>) -> Result<Response<
 
 #[tokio::main]
 async fn main() {
-    Server::new().run().await
+    let config = Config::new();
+    Server::new(config).run().await
 }

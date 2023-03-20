@@ -1,6 +1,6 @@
 use hyper::server::conn::AddrStream;
 use hyper::service::{make_service_fn, service_fn};
-use hyper::{Body, Method, Response, StatusCode};
+use hyper::{Body, Method, StatusCode};
 use std::convert::Infallible;
 use std::env;
 use std::fmt::Write;
@@ -60,7 +60,7 @@ impl Server {
         config: Config,
         remote_addr: SocketAddr,
         request: hyper::Request<Body>,
-    ) -> Result<Response<Body>, Infallible> {
+    ) -> Result<hyper::Response<Body>, Infallible> {
         println!(
             "{} {} {}",
             remote_addr,
@@ -70,7 +70,7 @@ impl Server {
 
         let request = Request::new(config.clone(), request);
         let handler = Handler::new(config, request);
-        handler.handle().await
+        Ok(handler.handle().await.into())
     }
 }
 
@@ -110,6 +110,31 @@ impl Request {
     }
 }
 
+struct Response {
+    response: hyper::Response<Body>,
+}
+
+impl Response {
+    fn new(body: Body) -> Self {
+        let response = hyper::Response::new(body);
+        Response { response }
+    }
+
+    fn bad_request() -> Self {
+        let response = hyper::Response::builder()
+            .status(StatusCode::BAD_REQUEST)
+            .body(Body::empty())
+            .unwrap();
+        Response { response }
+    }
+}
+
+impl From<Response> for hyper::Response<Body> {
+    fn from(response: Response) -> Self {
+        response.response
+    }
+}
+
 struct Handler {
     _config: Config, // TODO: remove?
     request: Request,
@@ -123,21 +148,14 @@ impl Handler {
         }
     }
 
-    async fn handle(&self) -> Result<Response<Body>, Infallible> {
+    async fn handle(&self) -> Response {
         match self.request.method() {
             &Method::GET => self.handle_get().await,
-            _ => self.bad_request(),
+            _ => Response::bad_request(),
         }
     }
 
-    fn bad_request(&self) -> Result<Response<Body>, Infallible> {
-        Ok(Response::builder()
-            .status(StatusCode::BAD_REQUEST)
-            .body(Body::empty())
-            .unwrap())
-    }
-
-    async fn handle_get(&self) -> Result<Response<Body>, Infallible> {
+    async fn handle_get(&self) -> Response {
         if self.is_local_dir().await {
             self.handle_get_dir().await
         } else {
@@ -153,10 +171,10 @@ impl Handler {
         }
     }
 
-    async fn handle_get_dir(&self) -> Result<Response<Body>, Infallible> {
+    async fn handle_get_dir(&self) -> Response {
         let html = self.get_local_dir_html().await;
         let body = Body::from(html);
-        Ok(Response::new(body))
+        Response::new(body)
     }
 
     fn get_local_dir_html_start(&self) -> String {
@@ -225,15 +243,15 @@ impl Handler {
         html
     }
 
-    async fn handle_get_file(&self) -> Result<Response<Body>, Infallible> {
+    async fn handle_get_file(&self) -> Response {
         let path = self.request.local_path();
         match File::open(path).await {
             Ok(file) => {
                 let stream = FramedRead::new(file, BytesCodec::new());
                 let body = Body::wrap_stream(stream);
-                Ok(Response::new(body))
+                Response::new(body)
             }
-            _ => self.bad_request(),
+            _ => Response::bad_request(),
         }
     }
 }

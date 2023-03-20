@@ -131,14 +131,14 @@ impl Handler {
         <hr>\n\
         <ul>\n\
         <li><a href={1}>..</a></li>",
-            self.request.uri().path(),
+            self.get_uri_path(),
             self.get_uri_path_parent(),
         );
         html
     }
 
     async fn get_local_dir_html_li(&self, html: &mut String) {
-        let req_path = self.request.uri().path();
+        let req_path = self.get_uri_path();
         let local_path = self.get_local_path();
         if let Ok(mut entries) = tokio::fs::read_dir(local_path).await {
             while let Ok(Some(entry)) = entries.next_entry().await {
@@ -198,15 +198,19 @@ impl Handler {
     }
 
     fn get_local_path(&self) -> PathBuf {
-        let mut path = self.request.uri().path();
+        let mut path = self.get_uri_path();
         if path.len() > 0 {
             path = &path[1..];
         }
         self.config.dir.join(path)
     }
 
+    fn get_uri_path(&self) -> &str {
+        self.request.uri().path()
+    }
+
     fn get_uri_path_parent(&self) -> &str {
-        let path = self.request.uri().path();
+        let path = self.get_uri_path();
         match path.rsplit_once("/") {
             Some(("", _right)) => "/",
             Some((left, _right)) => left,

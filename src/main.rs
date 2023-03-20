@@ -59,26 +59,28 @@ impl Server {
     async fn handle(
         config: Config,
         remote_addr: SocketAddr,
-        req: Request<Body>,
+        request: Request<Body>,
     ) -> Result<Response<Body>, Infallible> {
-        let handler = Handler::new(config, remote_addr, req);
+        println!(
+            "{} {} {}",
+            remote_addr,
+            request.method(),
+            request.uri().path()
+        );
+
+        let handler = Handler::new(config, request);
         handler.handle().await
     }
 }
 
 struct Handler {
     config: Config,
-    remote_addr: SocketAddr,
     request: Request<Body>,
 }
 
 impl Handler {
-    fn new(config: Config, remote_addr: SocketAddr, request: Request<Body>) -> Self {
-        Handler {
-            config,
-            remote_addr,
-            request,
-        }
+    fn new(config: Config, request: Request<Body>) -> Self {
+        Handler { config, request }
     }
 
     async fn handle(&self) -> Result<Response<Body>, Infallible> {
@@ -96,13 +98,6 @@ impl Handler {
     }
 
     async fn handle_get(&self) -> Result<Response<Body>, Infallible> {
-        println!(
-            "{} {} {}",
-            self.remote_addr,
-            self.request.method(),
-            self.request.uri().path()
-        );
-
         if self.is_local_dir().await {
             self.handle_get_dir().await
         } else {

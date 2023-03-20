@@ -1,6 +1,6 @@
 use hyper::server::conn::AddrStream;
 use hyper::service::{make_service_fn, service_fn};
-use hyper::{Body, Method, Request, Response, StatusCode};
+use hyper::{Body, Method, Response, StatusCode};
 use std::convert::Infallible;
 use std::env;
 use std::fmt::Write;
@@ -59,7 +59,7 @@ impl Server {
     async fn handle(
         config: Config,
         remote_addr: SocketAddr,
-        request: Request<Body>,
+        request: hyper::Request<Body>,
     ) -> Result<Response<Body>, Infallible> {
         println!(
             "{} {} {}",
@@ -68,19 +68,59 @@ impl Server {
             request.uri().path()
         );
 
+        let request = Request::new(config.clone(), request);
         let handler = Handler::new(config, request);
         handler.handle().await
     }
 }
 
-struct Handler {
+struct Request {
     config: Config,
-    request: Request<Body>,
+    request: hyper::Request<Body>,
+}
+
+impl Request {
+    fn new(config: Config, request: hyper::Request<Body>) -> Self {
+        Request { config, request }
+    }
+
+    fn method(&self) -> &hyper::Method {
+        self.request.method()
+    }
+
+    fn local_path(&self) -> PathBuf {
+        let mut path = self.uri_path();
+        if path.len() > 0 {
+            path = &path[1..];
+        }
+        self.config.dir.join(path)
+    }
+
+    fn uri_path(&self) -> &str {
+        self.request.uri().path()
+    }
+
+    fn uri_path_parent(&self) -> &str {
+        let path = self.uri_path();
+        match path.rsplit_once("/") {
+            Some(("", _right)) => "/",
+            Some((left, _right)) => left,
+            None => path,
+        }
+    }
+}
+
+struct Handler {
+    _config: Config, // TODO: remove?
+    request: Request,
 }
 
 impl Handler {
-    fn new(config: Config, request: Request<Body>) -> Self {
-        Handler { config, request }
+    fn new(config: Config, request: Request) -> Self {
+        Handler {
+            _config: config,
+            request,
+        }
     }
 
     async fn handle(&self) -> Result<Response<Body>, Infallible> {
@@ -106,7 +146,7 @@ impl Handler {
     }
 
     async fn is_local_dir(&self) -> bool {
-        let path = self.get_local_path();
+        let path = self.request.local_path();
         match tokio::fs::metadata(path).await {
             Ok(metadata) => metadata.is_dir(),
             Err(_) => false,
@@ -131,15 +171,15 @@ impl Handler {
         <hr>\n\
         <ul>\n\
         <li><a href={1}>..</a></li>",
-            self.get_uri_path(),
-            self.get_uri_path_parent(),
+            self.request.uri_path(),
+            self.request.uri_path_parent(),
         );
         html
     }
 
     async fn get_local_dir_html_li(&self, html: &mut String) {
-        let req_path = self.get_uri_path();
-        let local_path = self.get_local_path();
+        let req_path = self.request.uri_path();
+        let local_path = self.request.local_path();
         if let Ok(mut entries) = tokio::fs::read_dir(local_path).await {
             while let Ok(Some(entry)) = entries.next_entry().await {
                 if let Ok(filetype) = entry.file_type().await {
@@ -186,7 +226,7 @@ impl Handler {
     }
 
     async fn handle_get_file(&self) -> Result<Response<Body>, Infallible> {
-        let path = self.get_local_path();
+        let path = self.request.local_path();
         match File::open(path).await {
             Ok(file) => {
                 let stream = FramedRead::new(file, BytesCodec::new());
@@ -194,27 +234,6 @@ impl Handler {
                 Ok(Response::new(body))
             }
             _ => self.bad_request(),
-        }
-    }
-
-    fn get_local_path(&self) -> PathBuf {
-        let mut path = self.get_uri_path();
-        if path.len() > 0 {
-            path = &path[1..];
-        }
-        self.config.dir.join(path)
-    }
-
-    fn get_uri_path(&self) -> &str {
-        self.request.uri().path()
-    }
-
-    fn get_uri_path_parent(&self) -> &str {
-        let path = self.get_uri_path();
-        match path.rsplit_once("/") {
-            Some(("", _right)) => "/",
-            Some((left, _right)) => left,
-            None => path,
         }
     }
 }

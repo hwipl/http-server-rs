@@ -172,75 +172,67 @@ impl Handler {
     }
 
     async fn handle_get_dir(&self) -> Response {
-        let html = self.get_local_dir_html().await;
+        let mut html = format!(
+            "<!DOCTYPE html>\n\
+            <html>\n\
+            <head>\n\
+            <title>Directory listing for {0}</title>\n\
+            </head>\n\
+            <body>\n\
+            <h1>Directory listing for {0}</h1>\n\
+            <hr>\n\
+            <ul>\n\
+            <li><a href={1}>..</a></li>",
+            self.request.uri_path(),
+            self.request.uri_path_parent(),
+        );
+
+        for (name, is_dir) in self.get_local_dir_entries().await {
+            let is_dir = if is_dir { "/" } else { "" };
+            match self.request.uri_path() {
+                "/" => write!(html, "<li><a href=/{0}>{0}{1}</a></li>\n", name, is_dir).unwrap(),
+                _ => write!(
+                    html,
+                    "<li><a href={0}/{1}>{1}{2}</a></li>\n",
+                    self.request.uri_path(),
+                    name,
+                    is_dir,
+                )
+                .unwrap(),
+            };
+        }
+
+        write!(
+            html,
+            "</ul>\n\
+            <hr>\n\
+            </body>\n\
+            </html>"
+        )
+        .unwrap();
+
         let body = Body::from(html);
         Response::new(body)
     }
 
-    async fn get_local_dir_html(&self) -> String {
-        let mut html = self.get_local_dir_html_start();
-        self.get_local_dir_html_li(&mut html).await;
-        self.get_local_dir_html_end(&mut html);
-        html
-    }
+    async fn get_local_dir_entries(&self) -> Vec<(String, bool)> {
+        let mut dir_entries = Vec::new();
 
-    fn get_local_dir_html_start(&self) -> String {
-        let html = format!(
-            "<!DOCTYPE html>\n\
-        <html>\n\
-        <head>\n\
-        <title>Directory listing for {0}</title>\n\
-        </head>\n\
-        <body>\n\
-        <h1>Directory listing for {0}</h1>\n\
-        <hr>\n\
-        <ul>\n\
-        <li><a href={1}>..</a></li>",
-            self.request.uri_path(),
-            self.request.uri_path_parent(),
-        );
-        html
-    }
-
-    async fn get_local_dir_html_li(&self, html: &mut String) {
-        let req_path = self.request.uri_path();
-        let local_path = self.request.local_path();
-        if let Ok(mut entries) = tokio::fs::read_dir(local_path).await {
+        if let Ok(mut entries) = tokio::fs::read_dir(self.request.local_path()).await {
             while let Ok(Some(entry)) = entries.next_entry().await {
                 if let Ok(filetype) = entry.file_type().await {
                     if filetype.is_symlink() {
                         continue;
                     }
-                    let is_dir = match filetype.is_dir() {
-                        true => "/",
-                        false => "",
+
+                    if let Ok(name) = entry.file_name().into_string() {
+                        dir_entries.push((name, filetype.is_dir()));
                     };
-                    if let Some(name) = entry.file_name().to_str() {
-                        match req_path {
-                            "/" => write!(html, "<li><a href=/{0}>{0}{1}</a></li>\n", name, is_dir)
-                                .unwrap(),
-                            _ => write!(
-                                html,
-                                "<li><a href={0}/{1}>{1}{2}</a></li>\n",
-                                req_path, name, is_dir
-                            )
-                            .unwrap(),
-                        };
-                    }
                 }
             }
         }
-    }
 
-    fn get_local_dir_html_end(&self, html: &mut String) {
-        write!(
-            html,
-            "</ul>\n\
-        <hr>\n\
-        </body>\n\
-        </html>"
-        )
-        .unwrap();
+        dir_entries
     }
 
     async fn handle_get_file(&self) -> Response {

@@ -177,6 +177,13 @@ impl Handler {
         Response::new(body)
     }
 
+    async fn get_local_dir_html(&self) -> String {
+        let mut html = self.get_local_dir_html_start();
+        self.get_local_dir_html_li(&mut html).await;
+        self.get_local_dir_html_end(&mut html);
+        html
+    }
+
     fn get_local_dir_html_start(&self) -> String {
         let html = format!(
             "<!DOCTYPE html>\n\
@@ -234,13 +241,6 @@ impl Handler {
         </html>"
         )
         .unwrap();
-    }
-
-    async fn get_local_dir_html(&self) -> String {
-        let mut html = self.get_local_dir_html_start();
-        self.get_local_dir_html_li(&mut html).await;
-        self.get_local_dir_html_end(&mut html);
-        html
     }
 
     async fn handle_get_file(&self) -> Response {

@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+clap = { version = "4.1.11", features = ["derive"] }
 hyper = { version = "0.14.25", features = ["server", "http1", "http2", "tcp", "stream"] }
 tokio = { version = "1.26.0", features = ["fs", "macros", "rt", "rt-multi-thread"] }
 tokio-util = "0.7.7"

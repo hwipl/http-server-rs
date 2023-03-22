@@ -1,3 +1,4 @@
+use clap::Parser;
 use hyper::server::conn::AddrStream;
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Method, StatusCode};
@@ -9,6 +10,16 @@ use std::path::PathBuf;
 use tokio::fs::File;
 use tokio_util::codec::{BytesCodec, FramedRead};
 
+#[derive(Parser)]
+struct Args {
+    #[clap(default_value = "3000")]
+    port: u16,
+    #[clap(short, long, default_value = "127.0.0.1")]
+    bind: std::net::IpAddr,
+    #[clap(short, long, default_value_os_t = env::current_dir().unwrap())]
+    directory: PathBuf,
+}
+
 #[derive(Clone)]
 struct Config {
     addr: SocketAddr,
@@ -17,8 +28,9 @@ struct Config {
 
 impl Config {
     fn new() -> Self {
-        let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
-        let dir = env::current_dir().unwrap();
+        let args = Args::parse();
+        let addr = SocketAddr::from((args.bind, args.port));
+        let dir = args.directory;
         Config { addr, dir }
     }
 }

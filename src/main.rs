@@ -11,12 +11,16 @@ use tokio::fs::File;
 use tokio_util::codec::{BytesCodec, FramedRead};
 
 #[derive(Parser)]
+/// HTTP server that serves files from a local directory (default: current directory).
 struct Args {
-    #[clap(default_value = "3000")]
+    #[arg(default_value = "3000")]
+    /// Specify the TCP port the server is listening on.
     port: u16,
-    #[clap(short, long, default_value = "127.0.0.1")]
-    bind: std::net::IpAddr,
-    #[clap(short, long, default_value_os_t = env::current_dir().unwrap())]
+    #[arg(short = 'b', long = "bind", default_value = "127.0.0.1")]
+    /// Specify the IP address the server is listening on.
+    address: std::net::IpAddr,
+    #[arg(short, long, default_value_os_t = env::current_dir().unwrap())]
+    /// Specify the directory that is accessible by clients.
     directory: PathBuf,
 }
 
@@ -29,7 +33,7 @@ struct Config {
 impl Config {
     fn new() -> Self {
         let args = Args::parse();
-        let addr = SocketAddr::from((args.bind, args.port));
+        let addr = SocketAddr::from((args.address, args.port));
         let dir = args.directory;
         Config { addr, dir }
     }

@@ -30,6 +30,9 @@ struct Args {
     #[arg(short, long, default_value_os_t = env::current_dir().unwrap())]
     /// Specify the directory that is accessible by clients.
     directory: PathBuf,
+    #[arg(short, long, default_value_t = false)]
+    /// Run server in TLS mode
+    tls: bool,
 }
 
 #[derive(Clone)]
@@ -44,7 +47,7 @@ impl Config {
         let args = Args::parse();
         let addr = SocketAddr::from((args.address, args.port));
         let dir = args.directory;
-        let tls = false;
+        let tls = args.tls;
         Config { addr, dir, tls }
     }
 }

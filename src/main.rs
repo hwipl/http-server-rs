@@ -1,13 +1,21 @@
 use clap::Parser;
-use hyper::server::conn::AddrStream;
+use futures_util::StreamExt;
+use hyper::server::accept;
+use hyper::server::conn::{AddrIncoming, AddrStream};
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Method, StatusCode};
+use rcgen::generate_simple_self_signed;
 use std::convert::Infallible;
 use std::env;
 use std::fmt::Write;
+use std::future::ready;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::Arc;
+use tls_listener::TlsListener;
 use tokio::fs::File;
+use tokio_rustls::rustls::{Certificate, PrivateKey, ServerConfig};
+use tokio_rustls::TlsAcceptor;
 use tokio_util::codec::{BytesCodec, FramedRead};
 
 #[derive(Parser)]
@@ -28,6 +36,7 @@ struct Args {
 struct Config {
     addr: SocketAddr,
     dir: PathBuf,
+    tls: bool,
 }
 
 impl Config {
@@ -35,7 +44,8 @@ impl Config {
         let args = Args::parse();
         let addr = SocketAddr::from((args.address, args.port));
         let dir = args.directory;
-        Config { addr, dir }
+        let tls = false;
+        Config { addr, dir, tls }
     }
 }
 
@@ -48,7 +58,14 @@ impl Server {
         Server { config }
     }
 
-    async fn run(&self) {
+    async fn run(&self) -> Result<(), Box<dyn std::error::Error>> {
+        match self.config.tls {
+            false => self._run().await,
+            true => self._run_tls().await,
+        }
+    }
+
+    async fn _run(&self) -> Result<(), Box<dyn std::error::Error>> {
         // create request handler that uses remote address
         let make_service = make_service_fn(|conn: &AddrStream| {
             let config = self.config.clone();
@@ -70,6 +87,41 @@ impl Server {
         if let Err(e) = server.await {
             eprintln!("server error: {}", e);
         }
+        Ok(())
+    }
+
+    async fn _run_tls(&self) -> Result<(), Box<dyn std::error::Error>> {
+        // create request handler that uses remote address
+        let make_service = make_service_fn(|conn: &tokio_rustls::server::TlsStream<AddrStream>| {
+            let config = self.config.clone();
+            let remote_addr = conn.get_ref().0.remote_addr();
+            let service = service_fn(move |req| Self::handle(config.clone(), remote_addr, req));
+
+            async move { Ok::<_, Infallible>(service) }
+        });
+
+        let addr = self.config.addr;
+        let incoming =
+            TlsListener::new(Self::tls_acceptor(), AddrIncoming::bind(&addr)?).filter(|conn| {
+                if let Err(err) = conn {
+                    eprintln!("Error: {:?}", err);
+                    ready(false)
+                } else {
+                    ready(true)
+                }
+            });
+        let server = hyper::Server::builder(accept::from_stream(incoming)).serve(make_service);
+
+        println!(
+            "Serving HTTP on {} port {} (https://{}/)...",
+            addr.ip(),
+            addr.port(),
+            addr
+        );
+        if let Err(e) = server.await {
+            eprintln!("server error: {}", e);
+        }
+        Ok(())
     }
 
     async fn handle(
@@ -87,6 +139,22 @@ impl Server {
         let request = Request::new(config.clone(), request);
         let handler = Handler::new(config, request);
         Ok(handler.handle().await.into())
+    }
+
+    fn tls_acceptor() -> TlsAcceptor {
+        // generate certificate and private key
+        let cert = generate_simple_self_signed(Vec::new()).unwrap();
+        let key = PrivateKey(cert.serialize_private_key_der());
+        let cert = Certificate(cert.serialize_der().unwrap());
+
+        Arc::new(
+            ServerConfig::builder()
+                .with_safe_defaults()
+                .with_no_client_auth()
+                .with_single_cert(vec![cert], key)
+                .unwrap(),
+        )
+        .into()
     }
 }
 
@@ -265,7 +333,7 @@ impl Handler {
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = Config::new();
     Server::new(config).run().await
 }

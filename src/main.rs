@@ -33,6 +33,9 @@ struct Args {
     #[arg(short, long, default_value_t = false)]
     /// Run server in TLS mode
     tls: bool,
+    #[arg(long, default_value_t = false)]
+    /// Show TLS accept errors
+    tls_show_accept_errors: bool,
 }
 
 #[derive(Clone)]
@@ -40,6 +43,7 @@ struct Config {
     addr: SocketAddr,
     dir: PathBuf,
     tls: bool,
+    tls_show_accept_errors: bool,
 }
 
 impl Config {
@@ -48,7 +52,13 @@ impl Config {
         let addr = SocketAddr::from((args.address, args.port));
         let dir = args.directory;
         let tls = args.tls;
-        Config { addr, dir, tls }
+        let tls_show_accept_errors = args.tls_show_accept_errors;
+        Config {
+            addr,
+            dir,
+            tls,
+            tls_show_accept_errors,
+        }
     }
 }
 
@@ -107,7 +117,9 @@ impl Server {
         let incoming =
             TlsListener::new(Self::tls_acceptor(), AddrIncoming::bind(&addr)?).filter(|conn| {
                 if let Err(err) = conn {
-                    eprintln!("Error: {:?}", err);
+                    if self.config.tls_show_accept_errors {
+                        eprintln!("Error: {:?}", err);
+                    }
                     ready(false)
                 } else {
                     ready(true)

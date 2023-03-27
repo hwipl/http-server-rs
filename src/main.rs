@@ -63,12 +63,14 @@ impl Config {
 }
 
 struct Server {
-    config: Config,
+    config: Arc<Config>,
 }
 
 impl Server {
     fn new(config: Config) -> Self {
-        Server { config }
+        Server {
+            config: config.into(),
+        }
     }
 
     async fn run(&self) -> Result<(), Box<dyn std::error::Error>> {
@@ -140,7 +142,7 @@ impl Server {
     }
 
     async fn handle(
-        config: Config,
+        config: Arc<Config>,
         remote_addr: SocketAddr,
         request: hyper::Request<Body>,
     ) -> Result<hyper::Response<Body>, Infallible> {
@@ -174,12 +176,12 @@ impl Server {
 }
 
 struct Request {
-    config: Config,
+    config: Arc<Config>,
     request: hyper::Request<Body>,
 }
 
 impl Request {
-    fn new(config: Config, request: hyper::Request<Body>) -> Self {
+    fn new(config: Arc<Config>, request: hyper::Request<Body>) -> Self {
         Request { config, request }
     }
 
@@ -235,12 +237,12 @@ impl From<Response> for hyper::Response<Body> {
 }
 
 struct Handler {
-    _config: Config, // TODO: remove?
+    _config: Arc<Config>, // TODO: remove?
     request: Request,
 }
 
 impl Handler {
-    fn new(config: Config, request: Request) -> Self {
+    fn new(config: Arc<Config>, request: Request) -> Self {
         Handler {
             _config: config,
             request,

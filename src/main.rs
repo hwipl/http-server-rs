@@ -43,6 +43,8 @@ struct Config {
     addr: SocketAddr,
     dir: PathBuf,
     tls: bool,
+    tls_cert: Certificate,
+    tls_key: PrivateKey,
     tls_show_accept_errors: bool,
 }
 
@@ -52,11 +54,17 @@ impl Config {
         let addr = SocketAddr::from((args.address, args.port));
         let dir = args.directory;
         let tls = args.tls;
+        let cert = generate_simple_self_signed(Vec::new()).unwrap();
+        let tls_key = PrivateKey(cert.serialize_private_key_der());
+        let tls_cert = Certificate(cert.serialize_der().unwrap());
         let tls_show_accept_errors = args.tls_show_accept_errors;
+
         Config {
             addr,
             dir,
             tls,
+            tls_cert,
+            tls_key,
             tls_show_accept_errors,
         }
     }
@@ -117,7 +125,7 @@ impl Server {
 
         let addr = self.config.addr;
         let incoming =
-            TlsListener::new(Self::tls_acceptor(), AddrIncoming::bind(&addr)?).filter(|conn| {
+            TlsListener::new(self.tls_acceptor(), AddrIncoming::bind(&addr)?).filter(|conn| {
                 if let Err(err) = conn {
                     if self.config.tls_show_accept_errors {
                         eprintln!("Error: {:?}", err);
@@ -158,11 +166,9 @@ impl Server {
         Ok(handler.handle().await.into())
     }
 
-    fn tls_acceptor() -> TlsAcceptor {
-        // generate certificate and private key
-        let cert = generate_simple_self_signed(Vec::new()).unwrap();
-        let key = PrivateKey(cert.serialize_private_key_der());
-        let cert = Certificate(cert.serialize_der().unwrap());
+    fn tls_acceptor(&self) -> TlsAcceptor {
+        let cert = self.config.tls_cert.clone();
+        let key = self.config.tls_key.clone();
 
         Arc::new(
             ServerConfig::builder()

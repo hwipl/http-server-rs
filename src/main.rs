@@ -34,6 +34,12 @@ struct Args {
     #[arg(short, long, default_value_t = false)]
     /// Run server in TLS mode
     tls: bool,
+    #[arg(long)]
+    /// Load TLS certificate from file
+    tls_cert_file: Option<String>,
+    #[arg(long)]
+    /// Load TLS key from file
+    tls_key_file: Option<String>,
     #[arg(long, default_value_t = false)]
     /// Show TLS accept errors
     tls_show_accept_errors: bool,
@@ -55,11 +61,12 @@ impl Config {
         let addr = SocketAddr::from((args.address, args.port));
         let dir = args.directory;
         let tls = args.tls;
-        let (tls_key, tls_cert) = if false {
-            Self::load_key_and_cert("".into(), "".into())
-        } else {
-            Self::generate_key_and_cert()
-        };
+        let (tls_key, tls_cert) =
+            if let (Some(key_file), Some(cert_file)) = (args.tls_key_file, args.tls_cert_file) {
+                Self::load_key_and_cert(key_file, cert_file)
+            } else {
+                Self::generate_key_and_cert()
+            };
         let tls_show_accept_errors = args.tls_show_accept_errors;
 
         Config {

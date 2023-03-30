@@ -5,6 +5,7 @@ use hyper::server::conn::{AddrIncoming, AddrStream};
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Method, StatusCode};
 use rcgen::generate_simple_self_signed;
+use rustls_pemfile::{read_one, Item};
 use std::convert::Infallible;
 use std::env;
 use std::fmt::Write;
@@ -54,7 +55,11 @@ impl Config {
         let addr = SocketAddr::from((args.address, args.port));
         let dir = args.directory;
         let tls = args.tls;
-        let (tls_key, tls_cert) = Self::generate_key_and_cert();
+        let (tls_key, tls_cert) = if false {
+            Self::load_key_and_cert("".into(), "".into())
+        } else {
+            Self::generate_key_and_cert()
+        };
         let tls_show_accept_errors = args.tls_show_accept_errors;
 
         Config {
@@ -65,6 +70,55 @@ impl Config {
             tls_key,
             tls_show_accept_errors,
         }
+    }
+
+    fn load_key_and_cert(key_file: String, cert_file: String) -> (PrivateKey, Certificate) {
+        let key = Self::load_key_file(key_file).unwrap();
+        let cert = Self::load_cert_file(cert_file).unwrap();
+
+        (key, cert)
+    }
+
+    fn load_key_file(file: String) -> std::io::Result<PrivateKey> {
+        // open file
+        let f = std::fs::File::open(file)?;
+        let mut reader = std::io::BufReader::new(f);
+
+        // parse file
+        for item in std::iter::from_fn(|| read_one(&mut reader).transpose()) {
+            match item.unwrap() {
+                Item::RSAKey(key) | Item::PKCS8Key(key) | Item::ECKey(key) => {
+                    return Ok(PrivateKey(key));
+                }
+                _ => (),
+            }
+        }
+
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "no key found in file",
+        ))
+    }
+
+    fn load_cert_file(file: String) -> std::io::Result<Certificate> {
+        // open file
+        let f = std::fs::File::open(file)?;
+        let mut reader = std::io::BufReader::new(f);
+
+        // parse file
+        for item in std::iter::from_fn(|| read_one(&mut reader).transpose()) {
+            match item.unwrap() {
+                Item::X509Certificate(cert) => {
+                    return Ok(Certificate(cert));
+                }
+                _ => (),
+            }
+        }
+
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "no cert found in file",
+        ))
     }
 
     fn generate_key_and_cert() -> (PrivateKey, Certificate) {

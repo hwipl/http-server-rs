@@ -54,9 +54,7 @@ impl Config {
         let addr = SocketAddr::from((args.address, args.port));
         let dir = args.directory;
         let tls = args.tls;
-        let cert = generate_simple_self_signed(Vec::new()).unwrap();
-        let tls_key = PrivateKey(cert.serialize_private_key_der());
-        let tls_cert = Certificate(cert.serialize_der().unwrap());
+        let (tls_key, tls_cert) = Self::generate_key_and_cert();
         let tls_show_accept_errors = args.tls_show_accept_errors;
 
         Config {
@@ -67,6 +65,14 @@ impl Config {
             tls_key,
             tls_show_accept_errors,
         }
+    }
+
+    fn generate_key_and_cert() -> (PrivateKey, Certificate) {
+        let cert = generate_simple_self_signed(Vec::new()).unwrap();
+        let tls_key = PrivateKey(cert.serialize_private_key_der());
+        let tls_cert = Certificate(cert.serialize_der().unwrap());
+
+        (tls_key, tls_cert)
     }
 }
 

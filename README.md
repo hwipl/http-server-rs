@@ -4,7 +4,7 @@ http-server-rs is an HTTP server inspired by `python -m http.server`. It serves
 files from a local directory (default: current directory). In addition to HTTP,
 it supports HTTPS. If the user provides no TLS key and certificate, it
 generates a self-signed certificate automatically. Currently, it does not
-support cgi-bin.
+support CGI.
 
 ## Usage
 

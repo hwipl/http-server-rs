@@ -191,8 +191,9 @@ impl Server {
         });
 
         let addr = self.config.addr;
-        let incoming =
-            TlsListener::new(self.tls_acceptor(), AddrIncoming::bind(&addr)?).filter(|conn| {
+        let incoming = TlsListener::new(self.tls_acceptor(), AddrIncoming::bind(&addr)?)
+            .connections()
+            .filter(|conn| {
                 if let Err(err) = conn {
                     if self.config.tls_show_accept_errors {
                         eprintln!("Error: {:?}", err);

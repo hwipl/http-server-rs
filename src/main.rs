@@ -1,23 +1,27 @@
 use clap::Parser;
-use futures_util::StreamExt;
-use hyper::server::accept;
-use hyper::server::conn::{AddrIncoming, AddrStream};
-use hyper::service::{make_service_fn, service_fn};
-use hyper::{Body, Method, StatusCode};
+use futures_util::TryStreamExt;
+use http_body_util::combinators::BoxBody;
+use http_body_util::{BodyExt, Empty, Full, StreamBody};
+use hyper::body::{Bytes, Frame};
+use hyper::service::service_fn;
+use hyper::{Method, StatusCode};
+use hyper_util::rt::TokioIo;
+use hyper_util::server;
 use rcgen::generate_simple_self_signed;
 use rustls_pemfile::{read_one, Item};
 use std::convert::Infallible;
 use std::env;
 use std::fmt::Write;
-use std::future::ready;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tls_listener::TlsListener;
 use tokio::fs::File;
-use tokio_rustls::rustls::{Certificate, PrivateKey, ServerConfig};
+use tokio::net::TcpListener;
+use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
+use tokio_rustls::rustls::ServerConfig;
 use tokio_rustls::TlsAcceptor;
-use tokio_util::codec::{BytesCodec, FramedRead};
+use tokio_util::io::ReaderStream;
 
 #[derive(Parser)]
 /// HTTP server that serves files from a local directory (default: current directory).
@@ -45,13 +49,12 @@ struct Args {
     tls_show_accept_errors: bool,
 }
 
-#[derive(Clone)]
 struct Config {
     addr: SocketAddr,
     dir: PathBuf,
     tls: bool,
-    tls_cert: Certificate,
-    tls_key: PrivateKey,
+    tls_cert: CertificateDer<'static>,
+    tls_key: PrivateKeyDer<'static>,
     tls_show_accept_errors: bool,
 }
 
@@ -79,14 +82,17 @@ impl Config {
         }
     }
 
-    fn load_key_and_cert(key_file: String, cert_file: String) -> (PrivateKey, Certificate) {
+    fn load_key_and_cert(
+        key_file: String,
+        cert_file: String,
+    ) -> (PrivateKeyDer<'static>, CertificateDer<'static>) {
         let key = Self::load_key_file(key_file).unwrap();
         let cert = Self::load_cert_file(cert_file).unwrap();
 
         (key, cert)
     }
 
-    fn load_key_file(file: String) -> std::io::Result<PrivateKey> {
+    fn load_key_file(file: String) -> std::io::Result<PrivateKeyDer<'static>> {
         // open file
         let f = std::fs::File::open(file)?;
         let mut reader = std::io::BufReader::new(f);
@@ -94,9 +100,9 @@ impl Config {
         // parse file
         for item in std::iter::from_fn(|| read_one(&mut reader).transpose()) {
             match item.unwrap() {
-                Item::RSAKey(key) | Item::PKCS8Key(key) | Item::ECKey(key) => {
-                    return Ok(PrivateKey(key));
-                }
+                Item::Pkcs1Key(key) => return Ok(key.into()),
+                Item::Pkcs8Key(key) => return Ok(key.into()),
+                Item::Sec1Key(key) => return Ok(key.into()),
                 _ => (),
             }
         }
@@ -107,7 +113,7 @@ impl Config {
         ))
     }
 
-    fn load_cert_file(file: String) -> std::io::Result<Certificate> {
+    fn load_cert_file(file: String) -> std::io::Result<CertificateDer<'static>> {
         // open file
         let f = std::fs::File::open(file)?;
         let mut reader = std::io::BufReader::new(f);
@@ -116,7 +122,7 @@ impl Config {
         for item in std::iter::from_fn(|| read_one(&mut reader).transpose()) {
             match item.unwrap() {
                 Item::X509Certificate(cert) => {
-                    return Ok(Certificate(cert));
+                    return Ok(cert);
                 }
                 _ => (),
             }
@@ -128,12 +134,12 @@ impl Config {
         ))
     }
 
-    fn generate_key_and_cert() -> (PrivateKey, Certificate) {
+    fn generate_key_and_cert() -> (PrivateKeyDer<'static>, CertificateDer<'static>) {
         let cert = generate_simple_self_signed(Vec::new()).unwrap();
-        let tls_key = PrivateKey(cert.serialize_private_key_der());
-        let tls_cert = Certificate(cert.serialize_der().unwrap());
+        let tls_key = cert.serialize_private_key_der();
+        let tls_cert = cert.serialize_der().unwrap();
 
-        (tls_key, tls_cert)
+        (PrivatePkcs8KeyDer::from(tls_key).into(), tls_cert.into())
     }
 }
 
@@ -156,17 +162,9 @@ impl Server {
     }
 
     async fn _run(&self) -> Result<(), Box<dyn std::error::Error>> {
-        // create request handler that uses remote address
-        let make_service = make_service_fn(|conn: &AddrStream| {
-            let config = self.config.clone();
-            let remote_addr = conn.remote_addr();
-            let service = service_fn(move |req| Self::handle(config.clone(), remote_addr, req));
-
-            async move { Ok::<_, Infallible>(service) }
-        });
-
+        // create listener
         let addr = self.config.addr;
-        let server = hyper::Server::bind(&addr).serve(make_service);
+        let listener = TcpListener::bind(addr).await?;
 
         println!(
             "Serving HTTP on {} port {} (http://{}/)...",
@@ -174,36 +172,37 @@ impl Server {
             addr.port(),
             addr
         );
-        if let Err(e) = server.await {
-            eprintln!("server error: {}", e);
+
+        // main loop
+        loop {
+            // get connection from listener
+            let (stream, remote_addr) = listener.accept().await?;
+            let io = TokioIo::new(stream);
+
+            // set service function
+            let config = self.config.clone();
+            let service = move |req: hyper::Request<hyper::body::Incoming>| {
+                let config = config.clone();
+                async move { Self::handle(config, remote_addr, req).await }
+            };
+
+            // handle connection
+            tokio::task::spawn(async move {
+                if let Err(err) =
+                    server::conn::auto::Builder::new(hyper_util::rt::TokioExecutor::new())
+                        .serve_connection(io, service_fn(service))
+                        .await
+                {
+                    eprintln!("server error: {}", err);
+                }
+            });
         }
-        Ok(())
     }
 
     async fn _run_tls(&self) -> Result<(), Box<dyn std::error::Error>> {
-        // create request handler that uses remote address
-        let make_service = make_service_fn(|conn: &tokio_rustls::server::TlsStream<AddrStream>| {
-            let config = self.config.clone();
-            let remote_addr = conn.get_ref().0.remote_addr();
-            let service = service_fn(move |req| Self::handle(config.clone(), remote_addr, req));
-
-            async move { Ok::<_, Infallible>(service) }
-        });
-
+        // create listener
         let addr = self.config.addr;
-        let incoming = TlsListener::new(self.tls_acceptor(), AddrIncoming::bind(&addr)?)
-            .connections()
-            .filter(|conn| {
-                if let Err(err) = conn {
-                    if self.config.tls_show_accept_errors {
-                        eprintln!("Error: {:?}", err);
-                    }
-                    ready(false)
-                } else {
-                    ready(true)
-                }
-            });
-        let server = hyper::Server::builder(accept::from_stream(incoming)).serve(make_service);
+        let mut listener = TlsListener::new(self.tls_acceptor(), TcpListener::bind(addr).await?);
 
         println!(
             "Serving HTTP on {} port {} (https://{}/)...",
@@ -211,17 +210,46 @@ impl Server {
             addr.port(),
             addr
         );
-        if let Err(e) = server.await {
-            eprintln!("server error: {}", e);
+
+        // main loop
+        loop {
+            // get connection from listener
+            let (stream, remote_addr) = match listener.accept().await {
+                Ok((stream, remote_addr)) => (stream, remote_addr),
+                Err(err) => {
+                    if self.config.tls_show_accept_errors {
+                        eprintln!("Error: {:?}", err);
+                    }
+                    continue;
+                }
+            };
+            let io = TokioIo::new(stream);
+
+            // set service function
+            let config = self.config.clone();
+            let service = move |req: hyper::Request<hyper::body::Incoming>| {
+                let config = config.clone();
+                async move { Self::handle(config, remote_addr, req).await }
+            };
+
+            // handle connection
+            tokio::task::spawn(async move {
+                if let Err(err) =
+                    server::conn::auto::Builder::new(hyper_util::rt::TokioExecutor::new())
+                        .serve_connection(io, service_fn(service))
+                        .await
+                {
+                    eprintln!("server error: {}", err);
+                }
+            });
         }
-        Ok(())
     }
 
     async fn handle(
         config: Arc<Config>,
         remote_addr: SocketAddr,
-        request: hyper::Request<Body>,
-    ) -> Result<hyper::Response<Body>, Infallible> {
+        request: hyper::Request<hyper::body::Incoming>,
+    ) -> Result<hyper::Response<BoxBody<Bytes, std::io::Error>>, Infallible> {
         println!(
             "{} {} {}",
             remote_addr,
@@ -236,13 +264,12 @@ impl Server {
 
     fn tls_acceptor(&self) -> TlsAcceptor {
         let cert = self.config.tls_cert.clone();
-        let key = self.config.tls_key.clone();
+        let key = self.config.tls_key.clone_key();
 
         Arc::new(
             ServerConfig::builder()
-                .with_safe_defaults()
                 .with_no_client_auth()
-                .with_single_cert(vec![cert], key)
+                .with_single_cert(vec![cert.into()], key)
                 .unwrap(),
         )
         .into()
@@ -251,11 +278,11 @@ impl Server {
 
 struct Request {
     config: Arc<Config>,
-    request: hyper::Request<Body>,
+    request: hyper::Request<hyper::body::Incoming>,
 }
 
 impl Request {
-    fn new(config: Arc<Config>, request: hyper::Request<Body>) -> Self {
+    fn new(config: Arc<Config>, request: hyper::Request<hyper::body::Incoming>) -> Self {
         Request { config, request }
     }
 
@@ -286,11 +313,11 @@ impl Request {
 }
 
 struct Response {
-    response: hyper::Response<Body>,
+    response: hyper::Response<BoxBody<Bytes, std::io::Error>>,
 }
 
 impl Response {
-    fn new(body: Body) -> Self {
+    fn new(body: BoxBody<Bytes, std::io::Error>) -> Self {
         let response = hyper::Response::new(body);
         Response { response }
     }
@@ -298,13 +325,13 @@ impl Response {
     fn bad_request() -> Self {
         let response = hyper::Response::builder()
             .status(StatusCode::BAD_REQUEST)
-            .body(Body::empty())
+            .body(Empty::new().map_err(|e| match e {}).boxed())
             .unwrap();
         Response { response }
     }
 }
 
-impl From<Response> for hyper::Response<Body> {
+impl From<Response> for hyper::Response<BoxBody<Bytes, std::io::Error>> {
     fn from(response: Response) -> Self {
         response.response
     }
@@ -386,8 +413,8 @@ impl Handler {
         )
         .unwrap();
 
-        let body = Body::from(html);
-        Response::new(body)
+        let body = Full::from(html);
+        Response::new(body.map_err(|e| match e {}).boxed())
     }
 
     async fn get_local_dir_entries(&self) -> Vec<(String, bool)> {
@@ -414,9 +441,9 @@ impl Handler {
         let path = self.request.local_path();
         match File::open(path).await {
             Ok(file) => {
-                let stream = FramedRead::new(file, BytesCodec::new());
-                let body = Body::wrap_stream(stream);
-                Response::new(body)
+                let stream = ReaderStream::new(file);
+                let body = StreamBody::new(stream.map_ok(Frame::data));
+                Response::new(body.boxed())
             }
             _ => Response::bad_request(),
         }

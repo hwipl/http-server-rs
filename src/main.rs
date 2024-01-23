@@ -279,13 +279,38 @@ impl Server {
 struct Request {
     config: Arc<Config>,
     request: hyper::Request<hyper::body::Incoming>,
+    uri_path: String,
 }
 
 impl Request {
     fn new(config: Arc<Config>, request: hyper::Request<hyper::body::Incoming>) -> Self {
-        Request { config, request }
+        let uri_path = Self::remove_extra_slashes(request.uri().path());
+        Request {
+            config,
+            request,
+            uri_path,
+        }
     }
 
+    /// remove extra slashes from request path.
+    fn remove_extra_slashes(path: &str) -> String {
+        let mut out = String::new();
+        let mut previous_slash = false;
+        for c in path.chars() {
+            if c == '/' {
+                if previous_slash {
+                    // skip duplicate slashes
+                    continue;
+                }
+
+                previous_slash = true;
+            } else {
+                previous_slash = false;
+            }
+            out.push(c);
+        }
+        out
+    }
     fn method(&self) -> &hyper::Method {
         self.request.method()
     }
@@ -299,7 +324,7 @@ impl Request {
     }
 
     fn uri_path(&self) -> &str {
-        self.request.uri().path()
+        &self.uri_path
     }
 
     fn uri_path_parent(&self) -> &str {

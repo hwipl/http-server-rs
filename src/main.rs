@@ -284,7 +284,7 @@ struct Request {
 
 impl Request {
     fn new(config: Arc<Config>, request: hyper::Request<hyper::body::Incoming>) -> Self {
-        let uri_path = Self::remove_extra_slashes(request.uri().path());
+        let uri_path = Self::remove_extra_slashes(request.uri().path().trim_end_matches('/'));
         Request {
             config,
             request,
@@ -330,9 +330,9 @@ impl Request {
     fn uri_path_parent(&self) -> &str {
         let path = self.uri_path();
         match path.rsplit_once("/") {
-            Some(("", _right)) => "/",
+            Some(("", _right)) => "",
             Some((left, _right)) => left,
-            None => path,
+            None => "",
         }
     }
 }
@@ -403,30 +403,27 @@ impl Handler {
             "<!DOCTYPE html>\n\
             <html>\n\
             <head>\n\
-            <title>Directory listing for {0}</title>\n\
+            <title>Directory listing for {0}/</title>\n\
             </head>\n\
             <body>\n\
-            <h1>Directory listing for {0}</h1>\n\
+            <h1>Directory listing for {0}/</h1>\n\
             <hr>\n\
             <ul>\n\
-            <li><a href={1}>..</a></li>",
+            <li><a href={1}/>..</a></li>",
             self.request.uri_path(),
             self.request.uri_path_parent(),
         );
 
         for (name, is_dir) in self.get_local_dir_entries().await {
             let is_dir = if is_dir { "/" } else { "" };
-            match self.request.uri_path() {
-                "/" => write!(html, "<li><a href=/{0}>{0}{1}</a></li>\n", name, is_dir).unwrap(),
-                _ => write!(
-                    html,
-                    "<li><a href={0}/{1}>{1}{2}</a></li>\n",
-                    self.request.uri_path(),
-                    name,
-                    is_dir,
-                )
-                .unwrap(),
-            };
+            write!(
+                html,
+                "<li><a href={0}/{1}{2}>{1}{2}</a></li>\n",
+                self.request.uri_path(),
+                name,
+                is_dir,
+            )
+            .unwrap();
         }
 
         write!(

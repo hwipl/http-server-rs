@@ -278,16 +278,17 @@ impl Server {
 
 struct Request {
     config: Arc<Config>,
-    request: hyper::Request<hyper::body::Incoming>,
+    method: hyper::Method,
     uri_path: String,
 }
 
 impl Request {
     fn new(config: Arc<Config>, request: hyper::Request<hyper::body::Incoming>) -> Self {
+        let method = request.method().clone();
         let uri_path = Self::remove_extra_slashes(request.uri().path().trim_end_matches('/'));
         Request {
             config,
-            request,
+            method,
             uri_path,
         }
     }
@@ -312,7 +313,7 @@ impl Request {
         out
     }
     fn method(&self) -> &hyper::Method {
-        self.request.method()
+        &self.method
     }
 
     fn local_path(&self) -> PathBuf {
@@ -476,4 +477,60 @@ impl Handler {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = Config::new();
     Server::new(config).run().await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_get_uri_path_parent() {
+        for (path, want) in vec![
+            // Note: use paths with no extra or trailing slashes,
+            // they get removed by Request::new()
+
+            // root dir
+            ("/", ""),
+            ("/1", ""),
+            // not root dir
+            ("/1/2", "/1"),
+            ("/1/2/3", "/1/2"),
+            ("/1/2/3/4", "/1/2/3"),
+        ] {
+            let config = Config::new();
+            let request = Request {
+                config: config.into(),
+                method: hyper::Method::GET,
+                uri_path: path.into(),
+            };
+            assert_eq!(request.uri_path_parent(), want);
+        }
+    }
+
+    #[test]
+    fn test_remove_extra_slashes() {
+        for (path, want) in vec![
+            // regular paths
+            ("/", "/"),
+            ("/1/", "/1/"),
+            ("/1/2/", "/1/2/"),
+            ("/1/2/3/", "/1/2/3/"),
+            // paths starting with extra slashes
+            ("////////", "/"),
+            ("//////1/", "/1/"),
+            ("////1/2/", "/1/2/"),
+            ("//1/2/3/", "/1/2/3/"),
+            // paths ending with extra slashes
+            ("/1//////", "/1/"),
+            ("/1/2////", "/1/2/"),
+            ("/1/2/3//", "/1/2/3/"),
+            // paths with random extra slashes
+            ("/////1/////", "/1/"),
+            ("/1///////2/", "/1/2/"),
+            ("//1////2///", "/1/2/"),
+            ("//1//2//3//", "/1/2/3/"),
+        ] {
+            assert_eq!(Request::remove_extra_slashes(path), want);
+        }
+    }
 }

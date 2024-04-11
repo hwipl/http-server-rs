@@ -7,7 +7,7 @@ use hyper::service::service_fn;
 use hyper::{Method, StatusCode};
 use hyper_util::rt::TokioIo;
 use hyper_util::server;
-use rcgen::generate_simple_self_signed;
+use rcgen::{generate_simple_self_signed, CertifiedKey};
 use rustls_pemfile::{read_one, Item};
 use std::convert::Infallible;
 use std::env;
@@ -135,11 +135,11 @@ impl Config {
     }
 
     fn generate_key_and_cert() -> (PrivateKeyDer<'static>, CertificateDer<'static>) {
-        let cert = generate_simple_self_signed(Vec::new()).unwrap();
-        let tls_key = cert.serialize_private_key_der();
-        let tls_cert = cert.serialize_der().unwrap();
+        let CertifiedKey { cert, key_pair } = generate_simple_self_signed(Vec::new()).unwrap();
+        let tls_key = key_pair.serialize_der();
+        let tls_cert = cert.der().clone();
 
-        (PrivatePkcs8KeyDer::from(tls_key).into(), tls_cert.into())
+        (PrivatePkcs8KeyDer::from(tls_key).into(), tls_cert)
     }
 }
 

@@ -15,7 +15,6 @@ use std::fmt::Write;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tls_listener::TlsListener;
 use tokio::fs::File;
 use tokio::net::TcpListener;
 use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
@@ -202,7 +201,8 @@ impl Server {
     async fn _run_tls(&self) -> Result<(), Box<dyn std::error::Error>> {
         // create listener
         let addr = self.config.addr;
-        let mut listener = TlsListener::new(self.tls_acceptor(), TcpListener::bind(addr).await?);
+        let listener = TcpListener::bind(&addr).await?;
+        let acceptor = self.tls_acceptor();
 
         println!(
             "Serving HTTP on {} port {} (https://{}/)...",
@@ -216,6 +216,17 @@ impl Server {
             // get connection from listener
             let (stream, remote_addr) = match listener.accept().await {
                 Ok((stream, remote_addr)) => (stream, remote_addr),
+                Err(err) => {
+                    if self.config.tls_show_accept_errors {
+                        eprintln!("Error: {:?}", err);
+                    }
+                    continue;
+                }
+            };
+
+            // get tls stream
+            let stream = match acceptor.accept(stream).await {
+                Ok(stream) => stream,
                 Err(err) => {
                     if self.config.tls_show_accept_errors {
                         eprintln!("Error: {:?}", err);

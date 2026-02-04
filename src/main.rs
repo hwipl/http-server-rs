@@ -134,8 +134,8 @@ impl Config {
     }
 
     fn generate_key_and_cert() -> (PrivateKeyDer<'static>, CertificateDer<'static>) {
-        let CertifiedKey { cert, key_pair } = generate_simple_self_signed(Vec::new()).unwrap();
-        let tls_key = key_pair.serialize_der();
+        let CertifiedKey { cert, signing_key } = generate_simple_self_signed(Vec::new()).unwrap();
+        let tls_key = signing_key.serialize_der();
         let tls_cert = cert.der().clone();
 
         (PrivatePkcs8KeyDer::from(tls_key).into(), tls_cert)
